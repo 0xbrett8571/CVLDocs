@@ -1,933 +1,667 @@
-# Changes Introduced in CVL 2 — Certora Prover Documentation 0.0 documentation
-CVL 2 is a major overhaul to the type system of CVL. Though many of the changes are internal, we wanted to take this opportunity to introduce a few improvements to the syntax. The general goal of these changes is to make the behavior of CVL more explicit and predictable, and to bring the syntax more in line with Solidity’s syntax.
+# The Methods Block — Certora Prover Documentation 0.0 documentation
 
-This document summarizes the changes to CVL syntax introduced by CVL 2.
+# [The Methods Block](#id11)[](#the-methods-block "Link to this heading")
 
-The `CVLMigration` repository contains examples demonstrating each of the changes; the `cvl1` branch contains the examples in valid CVL 1 syntax, while the `cvl2` branch contains the same examples in CVL 2 syntax. You can see the differences here, our you can clone the repository and compare the `cvl1` and `cvl2` branches using your favorite tools.
+The `methods` block contains additional information about contract methods. Although you can call contract functions from CVL even if they are not declared in the methods block, the methods block allows users to specify additional information about contract methods, and can help document the expected interface of the contract.
 
-Contents
+There are two kinds of declarations:
 
-*   Changes Introduced in CVL 2
+*   **Non-summary declarations** document the interface between the specification and the contracts used during verification (see [envfree annotations](#envfree)). Non-summary declarations also support spec reuse by allowing specs written against a complete interface to be checked against a contract that only implements part of the interface (see [optional annotations](#optional)).
     
-    *   Superficial syntax changes
-        
-        *   `function` and `;` required for methods block entries
-            
-        *   Required `;` in more places
-            
-        *   Method literals require `sig:`
-            
-        *   Use of contract name instead of `using` variable
-            
-        *   Rules must start with `rule`
-            
-    *   Changes to methods block entries
-        
-        *   Most Solidity types allowed as arguments
-            
-        *   Required `internal` or `external` annotation
-            
-        *   `optional` methods block entries
-            
-        *   Required `calldata`, `memory`, or `storage` annotations for reference types
-            
-        *   Summaries only apply to one contract by default
-            
-        *   Requirements on `returns`
-            
-    *   Changes to integer types
-        
-        *   Mathematical operations return `mathint`
-            
-        *   Implicit and explicit casting
-            
-        *   Casting enums to integer types
-            
-        *   Casting addresses to bytes32
-            
-        *   Modulo operator `%` always returns non-negative values
-            
-        *   Support for `bytes1`…`bytes32`
-            
-        *   Changes for bitwise operations
-            
-    *   Changes to the fallback function
-        
-    *   Removed features
-        
-        *   Methods entries for sighashes
-            
-        *   `invoke`, `sinvoke`, and `call`
-            
-        *   `static_assert` and `static_require`
-            
-        *   `invoke_fallback` and `certorafallback()`
-            
-        *   `invoke_whole`
-            
-        *   Havocing local variables
-            
-        *   Destructuring syntax for struct returns
-            
-        *   [`bytes[]` and `string[]`](#bytes-and-string)
-            
-        *   `pragma`
-            
-        *   `events`
-            
-    *   Changes to the Command Line Interface (CLI)
-        
-        *   Flags Renaming
-            
-        *   `Prover Args`
-            
-        *   `Solidity Compiler Args`
-            
-        *   Enhanced server support
-            
+*   **Summary declarations** are used to replace calls to certain contract methods. Summaries allow the Prover to reason about external contracts whose code is unavailable. They can also be useful to simplify the code being verified to circumvent timeouts. See [Summaries](#summaries).
+    
 
-Superficial syntax changes
-
------------------------------------------------------------------------------------------
+Caution
 
-There are several simple changes to the syntax to make specs more uniform and consistent, and to reduce the superficial differences with Solidity.
+Summary declarations change the way that some function calls are interpreted, and are therefore [unsound](../user-guide/glossary.html#term-unsound) (with the exception of `HAVOC_ALL` summaries which are always sound, and `NONDET` summaries which are sound for `view` functions).
 
-### `function` and `;` required for methods block entries
-
+## [Syntax](#id12)[](#syntax "Link to this heading")
 
-In CVL 2, methods block entries must now start with `function` and end with `;` (semicolons were optional in CVL 1). For example (CVL 1, CVL 2, diff):
+Changed in version 4.0: The syntax for methods block entries [changed in CVL 2](cvl2/changes.html).
 
-```
-transferFrom(address, address, uint) returns(bool) envfree
+The syntax for the `methods` block is given by the following [EBNF grammar](overview.html#ebnf-syntax):
 
-```
+methods          ::= "methods" "{" { method\_spec } "}"
 
+method\_spec      ::= "function"
+                     ( exact\_pattern | wildcard\_pattern | catch\_all\_pattern | catch\_unresolved\_calls\_pattern )
+                     \[ "returns" "(" evm\_types ")" \]
+                     \[ "envfree" |  "with" "(" "env" id ")" \]
+                     \[ "optional" \]
+                     \[ "=>" method\_summary \[ "" | "UNRESOLVED" | "ALL" | "DELETE" \] \]
+                     ";"
 
-will become
+exact\_pattern    ::= \[ id "." \] id "(" evm\_params ")" visibility \[ "returns" "(" evm\_types ")" \]
+wildcard\_pattern ::= "\_" "." id "(" evm\_params ")" visibility
+catch\_all\_pattern ::= id "." "\_" "external"
+catch\_unresolved\_calls\_pattern ::= "\_" "." "\_" "external"
 
-```
-function transferFrom(address, address, uint) external returns(bool) envfree;
+visibility ::= "internal" | "external"
 
-```
+evm\_param ::= evm\_type \[ id \]
 
+method\_summary   ::= "ALWAYS" "(" value ")"
+                   | "CONSTANT"
+                   | "PER\_CALLEE\_CONSTANT"
+                   | "NONDET"
+                   | "HAVOC\_ECF"
+                   | "HAVOC\_ALL"
+                   | "DISPATCHER" \[ "(" ( "true" | "false" ) ")" \]
+                   | "AUTO"
+                   | "ASSERT\_FALSE"
+                   | expr \[ "expect" id \]
+                   | "DISPATCH" \[ "(optimistic=false)" \]  "\[" dispatch\_list\_pattern \[","\] | empty "\]" "default" method\_summary
+                   | "DISPATCH" \[ "(optimistic=true)" \]  "\[" dispatch\_list\_pattern \[","\] | empty "\]"
 
-(note also the addition of `external`, described below).
+dispatch\_list\_patterns ::= dispatch\_list\_patterns "," dispatch\_pattern
+                          | dispatch\_pattern
 
-This is also true for entries with summaries:
+dispatch\_pattern ::= | "\_" "." id "(" evm\_params ")"
+                     | id "." "\_"
+                     | id "." id "(" evm\_params ")"
 
-```
-balanceOf(address) returns(uint256) => ALWAYS(3)
+See [Types](types.html) for the `evm_type` production. See [Basic Syntax](basics.html) for the `id` production. See [Expressions](expr.html) for the `expr` production.
 
-```
+## [Methods entry patterns](#id13)[](#methods-entry-patterns "Link to this heading")
 
+Each entry in the methods block contains a pattern that matches some set of contract functions.
 
-will become
+*   [Exact entries](#exact-methods-entries) match a single method of a single contract.
+    
+*   [Wildcard entries](#wildcard-methods-entries) match a single method signature on all contracts.
+    
+*   [Catch-all entries](#catch-all-entries) apply a single summary to all methods of a specific contract.
+    
+*   [Catch unresolved-calls entry](#catch-unresolved-calls-entry) apply a summary to all calls that cannot be statically resolved in any contract.
+    
 
-```
-function balanceOf(address) external returns(uint256) => ALWAYS(3);
+### [Exact entries](#id14)[](#exact-entries "Link to this heading")
 
-```
-
-
-If you do not change this, you will get an error message like the following:
-
-```
-CRITICAL: [main] ERROR ALWAYS - certora/spec/MethodsEntries.spec:4:5: Syntax error: unexpected token near ID(transferFrom)
-CRITICAL: [main] ERROR ALWAYS - certora/spec/MethodsEntries.spec:4:5: Couldn't repair and continue parse unexpected token near ID(transferFrom)
-
-```
-
-
-### Required `;` in more places
-
-
-`using`, `import`, `use`, and `invariant` statements all require a `;` at the end. For example (CVL 1, CVL 2, diff):
-
-```
-invariant balanceOfZeroIsZero()
-    balanceOf(0) == 0
-
-```
-
-
-becomes
-
-```
-invariant balanceOfZeroIsZero()
-    balanceOf(0) == 0;
-
-```
-
-
-`use` and `invariant` statements do not require (and may not have) a semicolon if they are followed by a `preserved` or `filtered` block. For example, the following is valid in both CVL 1 and CVL 2:
-
-```
-invariant totalSupplyBoundsBalance(address a)
-    balanceOf(a) <= totalSupply()
-    { preserved { require false; } }
-
-```
-
-
-If you do not change this, you will see an error like the following:
-
-```
-CRITICAL: [main] ERROR ALWAYS - certora/spec/Semicolons.spec:5:1: Syntax error: unexpected token near using
-CRITICAL: [main] ERROR ALWAYS - certora/spec/Semicolons.spec:5:1: Couldn't repair and continue parse unexpected token near using
-
-```
-
-
-### Method literals require `sig:`
-
-
-In some places in CVL, you can refer to a contract method by its name and argument types. For example, you might write (CVL 1, CVL 2, diff):
-
-```
-f.selector == approve(address, uint).selector
-
-```
-
-
-In this example, `approve(address,uint)` is a _method literal_. In CVL 2, these methods literals must now start with `sig:`. For example, the above would become:
-
-```
-f.selector == sig:approve(address, uint).selector
-
-```
-
-
-If you do not change this, you will see the following error:
-
-```
-Error: Error in spec file (MethodLiterals.spec:14:5): Variable address is undefined (first instance only reported)
-Error: Error in spec file (MethodLiterals.spec:14:5): Variable uint is undefined (first instance only reported)
-Error: Error in spec file (MethodLiterals.spec:15:34): could not type expression "address", message: unknown variable "address"
-Error: Error in spec file (MethodLiterals.spec:15:43): could not type expression "uint", message: unknown variable "uint"
-
-```
-
-
-### Use of contract name instead of `using` variable
-
-
-In CVL 1, the only way to refer to a contract in the scene was to first introduce a contract instance variable with a `using` statement, and then use that variable. For example, to access a struct type `S` defined in `PrimaryContract.sol`, you would need to write (CVL 1, CVL 2, diff):
-
-```
-using PrimaryContract as primary;
-
-rule structExample {
-    primary.S x;
-    ...
-}
-
-```
-
-
-In CVL 2, you must now use the name of the contract, rather than the instance variable, when referring to user-defined types. The above example would now be written
-
-```
-rule structExample {
-    PrimaryContract.S x;
-    ...
-}
-
-```
-
-
-There is no need for a `using` statement in this example.
-
-If you don’t change this, you will an error like the following:
-
-```
-Error: Error in spec file (ContractNames.spec:12:19): Contract name primary does not exist in the scene. Make sure you are using a contract name and not a contract instance name.
-
-```
-
-
-Calling methods on secondary contracts still requires using a contract instance variable:
-
-```
-using SecondaryContract as secondary;
-
-rule multicontractExample {
-    ...
-    secondary.balanceOf(0);
-    ...
-}
-
-```
-
-
-Entries in the `methods` block may use either the contract name or an instance variable:
-
-```
-using SecondaryContract as secondary;
+An exact methods block entry matches a single method of a single contract. If the contract name is omitted, the default is `currentContract`. For example,
 
 methods {
-    //// both are valid (and the effect is the same):
-    secondary.balanceOf(address) returns(uint) envfree
-    SecondaryContract.transfer(address, uint) returns(bool) envfree
+    function C.f(uint x) external returns(uint);
 }
 
-```
+will match the external function `f` of the contract `C`.
 
+Exact methods block entries must include a return type; the Prover will check that the declared return type matches the return type of the contract function.
 
-Using the contract name in the methods block currently has the same effect as using an instance variable; this may change in future versions of CVL.
+Exact entries may contain [summaries](#summaries), [envfree annotations](#envfree), [optional annotations](#optional), and [with(env e) clauses](#with-env).
 
-### Rules must start with `rule`
-
+It is possible for an exact entry to overlap with another entry; see [Summary resolution](#summary-resolution) for information on how summaries are resolved.
 
-In CVL 1, you could omit the keyword `rule` when writing rules (CVL 1, CVL 2, diff):
+### [Wildcard entries](#id15)[](#wildcard-entries "Link to this heading")
 
-In CVL 2, the `rule` keyword is no longer optional:
+Added in version 4.0: Wildcard entries were [introduced with CVL 2](cvl2/changes.html#cvl2-wildcards).
 
-```
-rule transferReverts {
-    ...
-}
+A wildcard entry matches any function in any contract with the indicated name, argument types, and visibility. For example,
 
-```
-
-
-If you don’t change this, you will receive an error like the following:
-
-```
-CRITICAL: [main] ERROR ALWAYS - certora/spec/RuleKeyword.spec:3:1: Syntax error: unexpected token near ID(transferReverts)
-
-```
-
-
-Changes to methods block entries
-
------------------------------------------------------------------------------------------------------
-
-In addition to the superficial changes listed above, there are some changes to the way that methods block entries can be written (there are also a few instances where the meanings of entries has changed). In CVL 1, `methods` block entries often had several different functions and meanings:
-
-*   They were used to indicate targets for summarization
-    
-*   They were used to write generic specs that could apply to contracts with missing methods
-    
-*   They were used to declare targets `envfree`
-    
-
-The changes described in this section make these different uses more explicit:
-
-*   Most Solidity types allowed as arguments
-    
-*   Required `internal` or `external` annotation
-    
-*   `optional` methods block entries
-    
-*   Required `calldata`, `memory`, or `storage` annotations for reference types
-    
-*   Summaries only apply to one contract by default
-    
-*   Requirements on `returns`
-    
-
-### Most Solidity types allowed as arguments
-
-
-CVL 1 had some restrictions on the types of arguments allowed in `methods` block entries. For example, user-defined types (such as enums and structs) were not fully supported.
-
-CVL 2 `methods` block entries may use any Solidity types for arguments and return values, except for function types and contract or interface types.
-
-To work around the missing types, CVL 1 allowed users to encode some user-defined types as primitive types in the `methods` block; these workarounds are no longer allowed in CVL 2. For example, consider the following solidity function:
-
-```
-contract Example {
-    enum Permission { READ, WRITE };
-
-    function f(Permission p) internal { ... }
-}
-
-```
-
-
-In CVL 1, a methods block entry for `f` would need to declare that it takes a `uint8` argument:
-
-```
 methods {
-    f(uint8 permission) => NONDET
+    function \_.f(uint x) external \=> NONDET;
 }
 
-```
+will match any external function called `f(uint)` in any contract.
 
+Wildcard entries must not declare a return type, since different matched methods may return different types.
 
-In CVL 2, the methods block entry should use the same type as the Solidity implementations\[^contract-types\] (compare files), except for function types and contract or interface types:
+Wildcard entries may not have [envfree annotations](#envfree) or [optional annotations](#optional); their only purpose is [summarization](#summaries). Therefore, wildcard entries must have a summary.
 
-```
+It is possible for a wildcard entry to overlap with another entry; see [Summary resolution](#summary-resolution) for information on how summaries are resolved.
+
+### [Catch-all entries](#id16)[](#catch-all-entries "Link to this heading")
+
+Sometimes the behavior of a contract in the scene is irrelevant to the properties being verified. For example, the exact behavior of an external library contract may be unimportant for a particular verification project.
+
+So-called “catch-all” entries are useful in these situations. A catch-all entry is used to apply a single [summary](#summaries) to all functions that are declared in a given contract. For example:
+
 methods {
-    function f(Example.Permission p) internal => NONDET;
+   function SomeLibrary.\_ external \=> NONDET;
 }
 
-```
+Will apply the `NONDET` [havoc summary](#havoc-summary) in place of _every_ call to a function in the `SomeLibrary` contract. Note that there are no parameter types _or_ return types for this entry: it refers to all methods in a contract, and cannot be further refined with parameter type information. Catch-all summaries apply only to `external` methods, and therefore the `external` [visibility modifier](#methods-visibility) is required. Further, the only purpose of catch-all entries is to apply a summary to all external methods in a contract, so a summary is required. However, only [havocing summaries](#havoc-summary) are allowed for these entries. Finally, [envfree annotations](#envfree) and [optional annotations](#optional) keywords are not allowed for catch-all entries.
 
-
-The method can be called from CVL as follows:
-
-```
-rule example {
-    f(Example.Permission.READ);
-}
-
-```
-
-
-Contract functions that take or return contract or interface types should instead use `address` in the `methods` block declaration. For example, if the contract contains the following function:
-
-```
-function listToken(IERC20 token) internal { ... }
-
-```
-
-
-the `methods` block should use `address` for the `token` argument:
-
-```
-methods {
-    function listToken(address token) internal;
-}
-
-```
-
-
-Contract functions that take or return function types are not currently supported.
-
-### Required `internal` or `external` annotation
-
-
-Every methods block entry must be marked either `internal` or `external`. The annotation must come after the argument list and before the `returns` clause.
-
-If a function is declared `public` in Solidity, then the Solidity compiler creates an internal implementation method, and an external wrapper method that calls the internal implementation. Therefore, you can summarize a `public` method by marking the summarization `internal`.
-
-Warning
-
-The behavior of `internal` vs. `external` summarization for public methods can be confusing, especially because functions called directly from CVL are not summarized. See Visibility modifiers.
-
-### `optional` methods block entries
-
-
-In CVL 1, you could write an entry in the methods block for a method that does not exist in the contract; rules that would call the non-existent method were skipped during verification.
-
-This behavior can lead to confusion, because typos or name changes could silently cause a rule to be skipped.
-
-In CVL 2, this behavior is still available, but the methods entry must contain the keyword `optional` somewhere after the `returns` clause and before the summarization (if any).
-
-### Required `calldata`, `memory`, or `storage` annotations for reference types
-
-
-In CVL 2, methods block entries for internal functions must contain either `calldata`, `memory`, or `storage` annotations for all arguments with reference types (such as arrays).
-
-For methods block entries of external functions the location annotation must be omitted unless it’s the `storage` annotation on an external library function, in which case it is required (the reasoning here is to have the information required in order to correctly calculate a function’s sighash).
-
-### Summaries only apply to one contract by default
-
-
-In CVL 1, a summary in the `methods` block applied to all methods with the given signature.
-
-In CVL 2, summaries only apply to a single contract, unless the old behavior is explicitly requested by using `_` as the receiver. If no contract is specified, the default is `currentContract`.
+It is possible for a catch-all summary to overlap with another entry; see [Summary resolution](#summary-resolution) for information on how summaries are resolved.
 
 Note
 
-The receiver contract must be the contract where the method is defined. If a contract inherits a method defined in a supercontract, the receiver must be the supercontract, rather than the inheriting contract.
+Catch-all summaries are only applied when the Prover can definitively show that the target of a call resolves to the contract mentioned in the catch-all summary. For library contracts (a common use case for these catch-all summaries) the Prover is almost always able to resolve the target contract.
 
-Entries that use `_` as the receiver are called wildcard entries, summaries that do not are called exact entries.
+For example, if you have an entry `function Token._ external => NONDET;`, where the contract `Token` has a `burn()` method, the Prover will _not_ apply the `NONDET` summary for the call `t.burn()`, unless it can prove that `t` must hold the address of the `Token` contract. The “Rule Call Resolution” panel shown in the web report can indicate whether a summary was applied.
 
-Consider the following example:
+### [Catch unresolved-calls entry](#id17)[](#catch-unresolved-calls-entry "Link to this heading")
 
-```
-using C as c;
+Example:
 
 methods {
-    function f(uint)   internal => NONDET;
-    function c.g(uint) internal => ALWAYS(4);
-    function h(uint)   internal => ALWAYS(1);
-    function _.h(uint) internal => NONDET;
+    // Applies to all unresolved calls called within \`C.foo()\`
+    unresolved external in C.foo() \=> DISPATCH \[
+        D.baz()
+    \] default HAVOC\_ECF;
+
+    // Applies to all unresolved calls in the scene (except ones specified by more refined catch-unresolved-calls entries)
+    unresolved external in \_.\_ \=> DISPATCH \[
+        C.foo(uint),
+        \_.bar(address), // Will resolve to all available functions with the signature "bar(address)", specifically Other.bar(address)
+        C.\_ // Will resolve to all functions in C, specifically C.foo(uint) and C.baz(bool)
+    \] default NONDET;
+
+    // An optimistic dispatcher can be used to enforce resolving all unresolved calls to a specific method.
+    // Be aware: In case the method C.foo(uint) doesn't exist or the sighash doesn't match, this create vacuity.
+    unresolved external in \_.\_ \=> DISPATCH(optimistic\=true) \[
+        C.foo(uint)
+    \];
 }
 
-```
-
-
-In this example, the internal function `currentContract.f` has a `NONDET` summary, `c.g` has an `ALWAYS` summary, a call to `currentContact.h` has an `ALWAYS` summary and a call to `h(uint)` on any other contract will use a `NONDET` summary.
-
-Summaries for specific contract methods (including the default `currentContract`) always override wildcard summaries.
-
-Wildcard entries cannot be declared `optional` or `envfree`, since these annotations only make sense for specific contract methods.
-
-Warning
-
-The meaning of your summarizations will change from CVL 1 to CVL 2. In CVL 2, any entry without an `_` will only apply to a single contract!
-
-### Requirements on `returns`
-
-
-In CVL 1, the `returns` clause on methods block entries was optional. CVL 2 has stricter requirements on the declared return types.
-
-Entries that apply to specific contracts (i.e. those that don’t use the `_.f` syntax) must include a `returns` clause if the contract method returns a value. A specific-contract entry may only omit the `returns` clause if the contract method does not return a value.
-
-The Prover will report an error if the contract method’s return type differs from the type declared in the `methods` block entry.
-
-Wildcard entries must not declare return types, because they may apply to multiple methods that return different types. If a wildcard entry is summarized with a ghost or function summary, the summary must include an `expect` clause; see Expression summaries for more details.
-
-Changes to integer types
-
---------------------------------------------------------------------------------------
-
-In CVL 1, the rules for casting between integer types were complex; CVL 2 simplifies them.
-
-The general rule of thumb is that you should use `mathint` whenever possible; only use `uint` or `int` types for data that will be passed as input to contract functions.
-
-It is now impossible for CVL math expressions to cause overflow - all integer operations are exact. The remainder of this section describes the changes in detail.
-
-### Mathematical operations return `mathint`
-
-
-In CVL 2, the results of all arithmetic operators have type `mathint`, regardless of the input types. Arithmetic operators include `+`, `*`, `-`, `/`, `^`, and `%`, but not bitwise operators like `<<`, `xor`, and `|` (changes to bitwise operators are described below).
-
-The primary impact of this change is that you may need to declare more of your variables as `mathint` instead of `uint`. If you are passing the results of arithmetic operations to contract functions, you will need to be more explicit about the overflow behavior by using the new casting operators.
-
-### Implicit and explicit casting
-
-
-If every number that can be represented by one type can also be represented by another type, then we say that the first type is a _subtype_ of the second type.
-
-For example, a `uint8` variable could have any value between `0` and `2^8-1`, and all of these values can be stored in a `uint16` variable, so `uint8` is a subtype of `uint16`. An `int16` can also store any value between `0` and `2^8-1`, so `uint8` is also a subtype of `int16`.
-
-All integer types are subtypes of `mathint`, since any integer can be represented by a `mathint`.
-
-In CVL 1, the rules for converting between supertypes and subtypes were complicated; they depended not only on the types involved, but on the context in which the conversion happened. CVL 2 simplifies these rules and improves the clarity and predictability of casts.
-
-In CVL 2, you can always use a subtype whenever the supertype is accepted. For example, you can always use a `uint8` where an `int16` is expected. We say that the subtype can be “implicitly cast” to the supertype.
-
-In order to convert from a supertype to a subtype, you must use an explicit cast. In CVL 1, only a few casting operators (such as `to_uint256`) were supported.
-
-CVL 2 replaces these casting operators with two new casting operators: _assert casts_ such as `assert_uint8(x)` or `assert_int256(x)`, and _require casts_ such as `require_uint8(x)` or `require_int256(x)`. Each of these casts checks that the value is in range; the `assert` cast will report a counterexample if the value is out of range, while the `require` cast will ignore counterexamples where the cast value is out of range.
-
-Warning
-
-As with normal `require` statements, require casts can cause vacuity and should be used with care.
-
-CVL 2 supports assert and require casts on all numeric types.
-
-Casts from `address` or `bytes1`…`bytes32` to integer types are not supported (see Support for bytes1…bytes32 regarding casting in the other direction, and Casting enums to integer types for information on casting enums), except for going from `bytes32` to the equivalent `uint256`.
-
-`require` and `assert` casts are not allowed anywhere inside of a quantified statement. You can work around this limitation by adding a second variable. For example, the following axiom is invalid because `x+1` is not a `uint`:
-
-```
-ghost mapping(uint => uint) a {
-    axiom forall uint x . a[x+1] == 0
-}
-
-```
-
-
-However, it can be replaced with the following:
-
-```
-ghost mapping(uint => uint) a {
-    axiom forall uint x . forall uint y . (to_mathint(y) == x + 1) => a[y] == 0
-}
-
-```
-
-
-### Casting enums to integer types
-
-
-In CVL2 enums are not directly comparable to the corresponding integer type (`uint8`). Instead one must use one of the new cast operators. For example
-
-```
-uint8 x = MyContract.MyEnum.VAL; // will fail typechecking
-uint8 x = assert_uint8(MyContract.MyEnum.VAL); // good
-mathint x = to_mathint(MyContract.MyEnum.VAL); // good
-
-```
-
-
-Casting integer types to an enum is not supported.
-
-### Casting addresses to bytes32
-
-
-CVL2 supports casting from the `address` type to the `bytes32` type. For example:
-
-```
-address a = 0xa44f5d3d624DfD660ecc11FF777587AD0a19606d;
-bytes32 b = to_bytes32(a);
-
-```
-
-
-The cast from `address` to `bytes32` behaves equivalently to the Solidity code:
-
-```
-address a = 0xa44f5d3d624DfD660ecc11FF777587AD0a19606d;
-bytes32 b = bytes32(uint256(uint160(a)));
-
-```
-
-
-Among other things, this behavior means that the resulting `bytes32` value is right-aligned and zero-padded to the left.
-
-CVL2 also supports casting from the `bytes32` type to the `address` type using either the `require_address()` or `assert_address()` cast functions.
-
-```
-bytes32 b = to_bytes32(0xa44f5d3d624DfD660ecc11FF777587AD0a19606d);
-address a = assert_address(b);
-
-```
-
-
-Note that `require_address()` will silently allow a cast to continue when the `bytes32` variable contains a value that lies in the range `2^160 < var < 2^256`. The `assert_address()` cast function will fail when the `bytes32` variable contains a value in that same range.
-
-```
-bytes32 b = to_bytes32(0xa44f5d3d624DfD660ecc11FF777587AD0a19606d0e); // Note this contains one extra byte
-address a = require_address(b);                                       // Silently does the cast.
-
-```
-
-
-While when using `assert_address`:
-
-```
-bytes32 b = to_bytes32(0xa44f5d3d624DfD660ecc11FF777587AD0a19606d0e); // Note this contains one extra byte
-address a = assert_address(b);                                       // This will fail.
-
-```
-
-
-Casting from `bytes32` to `address` behaves equivalently to the Solidity code:
-
-```
-bytes32 b = bytes32(0xa44f5d3d624DfD660ecc11FF777587AD0a19606d);
-address a = address(uint160(uint256(b)));
-
-```
-
-
-### Modulo operator `%` always returns non-negative values
-
-
-The modulo operator `%` follows the semantics of Solidity’s unsigned modulo and always returns non-negative values, regardless of the signs of its operands.
-
-### Support for `bytes1`…`bytes32`
-
-
-CVL 2 supports the types `bytes1`, `bytes2`, …, `bytes32`, as in Solidity. Number literals must be explicitly cast to these types using `to_bytesN`; for example:
-
-```
-bytes32 x = to_bytes32(0);
-
-```
-
-
-Unlike Solidity, `bytes1`…`bytes32` literals do not need to be written in hex or padded to the correct length.
-
-The only conversion between integer types and these types is from `uint<i*8>` to `bytes<i>` (i.e. unsigned integers with the same bitwidth as the target `bytes<i>` type) and from `bytes32` to `uint256`; For example:
-
-```
-uint24 u;
-bytes3 x = to_bytes3(u); // This is OK
-bytes4 y = to_bytes4(u); // This will fail
-bytes32 b;
-uint256 u = assert_uint256(b); // This is OK
-
-```
-
-
-### Changes for bitwise operations
-
-
-In CVL1, the exact details for bitwise operations (such as `&`, `|`, and `<<`) were not completely specified, especially for negative integers.
-
-In CVL 2, all bitwise operations (`&`, `|`, `~`, `>>`, `>>>`, `<<`, and `xor`) on integer types first convert to a 256 bit word, then perform the operations on the full 256-bit word, then convert back to the expected type. Signed integer types use twos-complement encoding.
-
-The two right-shifts differ in how they treat signed integers. `>>` is an arithmetic shift; it preserves the sign bit. `>>>` is a logical shift; it pads the shifted word with zero.
-
-Bitwise operations cannot be performed on `mathint` values.
-
-Note
-
-By default, bitwise operators are overapproximated (in both CVL 1 and CVL 2), so you may see counterexamples that incorrectly compute the results of bitwise operations. The approximations are still sound: the Prover will not report a rule as verified if the original code does not satisfy the rule.
-
-The precise\_bitwise\_ops flag makes the Prover’s reasoning about bitwise operations more precise, but this flag is experimental in CVL 2.
-
-Changes to the fallback function
-
-------------------------------------------------------------------------------------------------------
-
-In CVL 1, you could determine whether a `method` object was the fallback function by comparing its selector to `certorafallback().selector`:
-
-```
-assert f.selector == certorafallback().selector,
-    "f must be the fallback";
-
-```
-
-
-In CVL 2, `certorafallback()` is no longer valid. Instead, you can use the new field `f.isFallback` to detect the fallback method:
-
-```
-assert f.isFallback,
-    "f must be the fallback";
-
-```
-
-
-Removed features
-
-----------------------------------------------------------------------
-
-As we transit to CVL 2, we have removed several language features that are no longer used.
-
-We have removed these features because we think they are no longer used and no longer useful. If you find that you do need one of these features, contact Certora support.
-
-### Methods entries for sighashes
-
-
-In CVL 1, you could write a sighash instead of a method identifier in the `methods` block. This feature is no longer supported. You will need to have the name and argument types of the called method in order to provide an entry.
-
-### `invoke`, `sinvoke`, and `call`
-
-
-Older versions of CVL had special syntax for calling contract and CVL functions:
-
-*   `invoke f(args);` should be replaced with `f@withrevert(args);`.
-    
-*   `sinvoke f(args);` should be replaced with `f(args);`.
-    
-*   `call f(args)` should be replaced with `f(args)`.
-    
-
-### `static_assert` and `static_require`
-
-
-These deprecated aliases for `assert` and `require` are being removed; replace them with `assert` and `require` respectively.
-
-### `invoke_fallback` and `certorafallback()`
-
-
-The `invoke_fallback` syntax is no longer supported; there is no longer a way to directly invoke the fallback method. You can work around this limitation by writing a parametric rule and filtering on `f.isFallback`. See Changes to the fallback function.
-
-### `invoke_whole`
-
-
-The `invoke_whole` keyword is no longer supported.
-
-### Havocing local variables
-
-
-In CVL 1, you could write the following:
-
-```
-calldataarg args; env e;
-f(e, args);
-
-havoc args;
-g(e, args);
-
-```
-
-
-In CVL 2, you can only `havoc` ghost variables and ghost functions. Instead of havocing a local variable, replace the havoced variable with a new variable. For example, you should replace the above with
-
-```
-calldataarg args; env e;
-f(e,args);
-
-calldataarg args2;
-g(e,args2);
-
-```
-
-
-### Destructuring syntax for struct returns
-
-
-In CVL 1, if a contract function returned a struct, you could use a destructuring syntax to get the return value in your spec. For example, consider the following contract:
-
-```
-contract Example {
-    struct S {
-        uint firstField;
-        uint secondField;
-        bool thirdField;
+Catch unresolved-calls entries are a special type of summary declaration that instructs the Prover to replace calls to unresolved external function calls with a specific kind of summary, dispatch list. By default, the Prover will use an [AUTO summary](#auto-summary) for unresolved function calls, but that may produce spurious counter examples. Catch unresolved-calls entries let the user refine the summary used for unresolved function calls.
+
+Note that the catch unresolved-calls entry _only applies_ in cases where the called function’s _sighash_ is unresolved. In the example below there is a function call `target.call(data)`. The sighash of the called function depends on the parameter `data` and cannot be known beforehand.
+
+    function flashLoan(
+        uint256 borrowAmount,
+        address borrower,
+        address target,
+        bytes calldata data
+    )
+        external
+    {
+        uint256 balanceBefore \= damnValuableToken.balanceOf(address(this));
+        require(balanceBefore \>= borrowAmount, "Not enough tokens in pool");
+        
+        damnValuableToken.transfer(borrower, borrowAmount);
+        (bool success, ) \= target.call(data);        require(success, "External call failed");
+
+        uint256 balanceAfter \= damnValuableToken.balanceOf(address(this));
+        require(balanceAfter \>= balanceBefore, "Flash loan hasn't been paid back");
     }
 
-    function f() returns(S) { ... }
-    function g() returns(uint, uint) { ... }
+One can specify the scope (`unresolved external in <scope>`) for which the unresolved summary will apply. The options are:
+
+*   `Contract.functionSignature()` for summarizing unresolved calls within this function
+    
+*   `_.functionSignature()` for summarizing unresolved calls within this function in any contract
+    
+*   `Contract._` for summarizing unresolved calls in any function of the given contract
+    
+*   `_._` for summarizing all unresolved calls in the scene.
+    
+
+If multiple catch unresolved-calls entries exist, the order of precedence is the order of the above list, from top to bottom.
+
+Note
+
+If `C.foo` has a (resolved) external call to `D.bar`, and `D.bar` contains an unresolved call, a catch-unresolved-calls entry that applies to `C.foo` will _not_ be applied to this unresolved call - only an entry that matches `D.bar` will be used.
+
+Catch unresolved-calls entries can only be summarized with a dispatch list summary (and a dispatch list summary is only applicable for a catch unresolved-calls entries).
+
+As with `DISPATCH`, there are optimistic and pessimistic dispatch lists. This can be specified via `DISPATCHER(optimistic=<true|false>). When the` optimistic\` option is not specified in parentheses, the Prover will use a pessimistic dispatch list to ensure sound reasoning.
+
+A dispatch list summary directs the Prover to consider each of the methods described in the list as possible candidates for this unresolved call. The Prover will choose dynamically, that is, for each potential run of the program, which of them to call. It is done accurately by matching the selector from the call’s arguments to that of the methods described in the dispatch list. When using a pessimistic dispatch list and no method from the list matches, it will use the `default` summary. When using the optimistic dispatch list, an `ASSUME FALSE;` is inlined by the Prover; see the example below. The dispatch list will contain a list of patterns and the default summary to use in case no function matched the selector. The possible patterns are:
+
+1.  Exact function - a pattern specifying both a contract, and the function signature. Example: `C.foo(uint)`
+    
+2.  Wildcard contract - a pattern specifying the function signature to match this signature on all available contracts (including the primary contract). Example: `_.bar(address)`
+    
+3.  Wildcard function - a pattern specifying a contract, and matches all external functions in specified contract (This pattern will also include the contract’s fallback if it’s implemented). Example: `C._`
+    
+
+The example entry at the head of this section will specify three functions to route calls to:
+
+1.  `C.foo(uint)`
+    
+2.  `Other.bar(address)`
+    
+3.  `C.baz(bool)`
+    
+
+Entry annotations ([envfree annotations](#envfree), [optional annotations](#optional)) and the `returns` clause are not allowed on an unresolved-calls entry. Also, the visibility is always external, and no policy should be specified.
+
+For an unresolved function call being summarized with the dispatch list above, the Prover will replace the call with a dynamic resolution of the function call. That is something in the lines of:
+
+function summarized(address a, bytes calldata data) external {
+  if (uint32(data\[0:4\]) \== 0x11111111 && address \== address(c)) {
+    // Function selector was equal to foo's
+    // Call C.foo(...)
+  } else if (uint32(data\[0:4\]) \== 0x22222222 && address \== address(o)) {
+    // Function selector was equal to bar's
+    // Call O.bar(...)
+  } else if (uint32(data\[0:4\]) \== 0x33333333 && address \== address(c)) {
+    // Function selector was equal to baz's
+    // Call C.baz(...)
+  } else {
+    // In the case of the DISPATCHER(optimistic=false), the summary 
+    // specified after the "default" is inlined here. This is typically a HAVOC\_ALL,
+    // HAVOC\_ECF or a NONDET.
+    // In the case of the DISPATCHER(optimistic=true) option, no default is used 
+    // and the Prover inlines an ASSUME FALSE; at this location marking 
+    // this branch as unreachable.
+  }
 }
 
-```
+The dispatch list summary will create a dynamic resolution process that determines the specific function to call at runtime based on the function signature and the target contract address. In the provided example, when an unresolved function call is encountered, the Prover dynamically resolves it by inspecting the function selector in the transaction data and the target contract address. By comparing the function selector against known signatures and verifying the contract address, the Prover identifies the appropriate function to call.
 
+This dynamic resolution mechanism is crucial for refining specifications because it enables the Prover to accurately model the behavior of smart contracts, even when the exact function being called is not known statically. By replacing unresolved calls with dynamically resolved calls in the dispatch list summary, the specification becomes more precise, leading to more accurate verification results and improved assurance in the correctness of the smart contract.
 
-To access the return value of `f` in CVL 1, you could write the following:
+### [Location annotations](#id18)[](#location-annotations "Link to this heading")
 
-```
-uint x; uint y; bool z;
-x, y, z = f();
+Added in version 4.0: Location annotations were [introduced with CVL 2](cvl2/changes.html#cvl2-locations).
 
-```
+Methods block entries for internal functions must contain either `calldata`, `memory`, or `storage` annotations for all arguments with reference types (such as arrays).
 
+Entries for external functions may have `storage` annotations for argument references (in Solidity, external library functions may have storage arguments). If a reference-type argument does not have a `storage` annotation, the entry will apply to a function that has either a `calldata` or a `memory` annotation on the argument.
 
-This syntax is no longer supported. Instead, you should declare a variable with the struct type:
+### [Visibility modifiers](#id19)[](#visibility-modifiers "Link to this heading")
 
-```
-Example.S result = f();
-uint x = result.firstField;
+Added in version 4.0: Visibility modifiers were [introduced with CVL 2](cvl2/changes.html#cvl2-visibility).
 
-```
+Entries in the methods block must be marked either `internal` or `external`; the entry will only match a function with the indicated visibility.
 
+If a function is declared `public` in Solidity, then the Solidity compiler creates an internal implementation method, and an external wrapper method that calls the internal implementation. An `internal` methods block entry will apply to the generated implementation method, while an `external` entry will apply to the generated external wrapper method.
 
-Destructuring assignments are still allowed for functions that return multiple values; the following is valid:
+This summarization behavior can be confusing, especially because functions called directly from CVL are not summarized.
 
-```
-uint x; uint y;
-x, y = g();
+Consider a public function `f`. Suppose we provide an `internal` summary for `f`:
 
-```
+*   Calls from CVL to `f` _will_ effectively be summarized, because CVL will call the external function, which will then call the internal implementation, and the internal implementation will be summarized.
+    
+*   Calls from another contract to `f` (or calls to `this.f` from `f`’s contract) _will_ effectively be summarized, again because the external function immediately calls the summarized internal implementation.
+    
+*   Internal calls to `f` will be summarized.
+    
 
+On the other hand, suppose we provide an `external` summary for `f`. In this case:
 
-### [`bytes[]` and `string[]`](#id33)
-
+*   Calls from CVL to `f` _will not_ be summarized, because direct calls from CVL to contract functions do not use summaries.
+    
+*   Internal calls to `f` _will not_ be summarized - they will use the original implementation.
+    
+*   External calls to `f` (from Solidity code that calls `this.f` or `c.f`) will be summarized
+    
 
-In CVL 1, you could declare variables of type `string[]` and `bytes[]`. You can no longer use these types in CVL.
+In most cases, public functions should use an `internal` summary, since this effectively summarizes both internal and external calls to the function.
 
-You can still declare contract methods that use these types in the `methods` block. However, you can only call methods that take one of these types as an argument by passing a `calldataarg` variable, and you cannot access the return value of a method that returns one of these types.
+## [`envfree` annotations](#id20)[](#envfree-annotations "Link to this heading")
 
-### `pragma`
-
+Following the `returns` clause of an exact methods entry is an optional `envfree` tag. Marking a method with `envfree` has two effects. First, [calls](expr.html#call-expr) to the method from CVL do not need to explicitly pass an [environment](../user-guide/glossary.html#term-environment) value as the first argument. Second, the Prover will verify that the method implementation in the contract being verified does not depend on any of the environment variables. The results of this check are displayed on the verification report as separate rules called `envfreeFuncsStaticCheck` and `envfreeFuncsAreNonpayable`[\[1\]](#envfree-nonpayable).
 
-CVL 1 had a `pragma` command for specifying the CVL version, but this feature was not used and has been removed in CVL 2.
+## [`optional` annotations](#id21)[](#optional-annotations "Link to this heading")
 
-### `events`
-
+Added in version 4.0: Prior to [CVL 2](cvl2/changes.html#cvl2-optional), all methods entries used the `optional` behavior, and there was no `optional` annotation.
 
-CVL 1 had syntax for an `events` block, but it did nothing and has been removed.
+When multiple contracts implement a shared interface, it is convenient to write a generic spec of generic rules. Some interfaces specify optional methods that some implementations provide and others don’t. For example, some ERC20 implementations contain a `mint` method, but others don’t.
 
-Changes to the Command Line Interface (CLI)
-
---------------------------------------------------------------------------------------------------------------------------
+In this situation, you might like to write rules that are checked if the contract contains the `mint` method and are skipped otherwise.
 
-As part of the transition to CVL 2 changes were made to enhanced clarity, uniformity, and readability on the Command-Line Interface (CLI). The complete CLI specification can be found here
+To do so, you can add the `optional` annotation to the exact methods block entry for the function. Any rules that reference an optional method will be skipped if the method does not exist in the contract. For example:
+
+methods {
+    function mint(address \_to, uint256 \_amount, bytes calldata \_data) external optional;
+}
+
+## [`with(env e)` clauses](#id22)[](#with-env-e-clauses "Link to this heading")
+
+After the `optional` annotation, an entry may contain a `with(env e)` clause. The `with` clause introduces a new variable (`e` for `with(env e)`) to represent the [environment](types.html#env) that is passed to a summarized function; the variable can be used in function summaries. `with` clauses may only be used if the entry has a function summary. See [Expression summaries](#expression-summary) below for more information about the environment provided by the `with` clause.
+
+## [Summaries](#id23)[](#summaries "Link to this heading")
+
+**Summary declarations** are used to replace calls to methods having the given signature with something that is simpler for the Prover to reason about. Summaries allow the Prover to reason about external contracts whose code is unavailable. They can also be useful to simplify the code being verified to circumvent timeouts.
+
+A summary is indicated by adding `=>` followed by the summary to the end of the entry in the methods block. For example,
+
+function f(uint) external returns(uint) \=> ALWAYS(0);
+
+will replace calls to `f` with an `ALWAYS` summary, while
+
+function f(uint x) external returns(uint) \=> cvl\_function(x);
+
+will replace calls to `f` with the CVL function `cvl_function`.
+
+There are several kinds of summaries available:
+
+*   [View summaries: ALWAYS, CONSTANT, PER\_CALLEE\_CONSTANT, and NONDET](#view-summary). These assume that the called method have no side-effects and simply replace them with a specific value.
+    
+*   [Havoc summaries: HAVOC\_ALL and HAVOC\_ECF](#havoc-summary). These assume that the called method can have arbitrary side-effects on the storage of some contracts.
+    
+*   [DISPATCHER summaries](#dispatcher) assume that the receiver of the method call could be any contract that implements the method.
+    
+*   [Expression summaries](#expression-summary) replace calls to the summarized method with a CVL expression, typically [Functions](functions.html) or [Ghost axioms](ghosts.html#ghost-axioms).
+    
+*   [AUTO summaries](#auto-summary) are the default for unresolved calls.
+    
+*   [ASSERT\_FALSE summaries](#assert-false-summary). These replace the method with an assert false, effectively checking that no such method is called.
+    
+
+### [Summary application](#id24)[](#summary-application "Link to this heading")
+
+To decide whether to summarize a given function call at a given call site, the Prover first determines whether it matches any of the declarations in the methods block, and then uses the declaration and the _calling context_ to determine whether the call should be replaced by an approximation.
+
+Specifically, the matching is based on three attributes:
+
+(1) The contract in which the method is defined, or a wildcard contract denoted with `_`.
+
+(2) The method signature, with optional named parameters.
+
+(3) The context in which it is called, either `external` or `internal`. A Solidity function which is defined as `public` can be specified in the methods block as either `external` or `internal`, and this affects which call sites of the function will be summarized.
+
+The ability of the Prover to match a particular call site to a method declaration depends on whether the call was _resolved_ or not, i.e., whether we know which target contract is called and which method signature is called. Internal calls are always resolved, but for external calls it is not always the case. For example, the target contract may be given by a user input, and there is no single match for the target contract:
+
+function callIt(address it) external {
+  IERC20(it).transfer(...); // cast \`it\` to an IERC20 contract and call the \`transfer\` method
+}
+
+Similarly, the method signature may also be not resolvable:
+
+function callIt(bytes memory data) external {
+  address(this).call(data);
+}
+
+To determine whether a function call is replaced by an approximation summary, the Prover considers all three aforementioned attributes, the resolved information, and in addition to that, also the application policy. If present, the application policy must be either `ALL`, `UNRESOLVED`, or `DELETE`. The `ALL` policy indicates the summary should be applied to all instances of the specified method, while `UNRESOLVED` applies only to methods that cannot be fully resolved (i.e., either target contract or the method signature are unknown). For internal summaries, the default is `ALL`, as all internal functions are always resolvable; thus `UNRESOLVED` is impossible and will yield an error. Similarly, for external summaries with contract-specific entries, the default policy is `ALL`. Conversely, for any external summary on wildcard contracts, the default policy is `UNRESOLVED`. One may apply the `ALL` policy to make the summary apply on all instances of the wildcard method, even on target contracts for which it was resolved, e.g. by [linking](../prover/cli/options.html#link).
+
+A `DELETE` summary is similar to an `ALL` summary, except that the `DELETE` summary removes the method from the [scene](../user-guide/glossary.html#term-scene) entirely. Calling the method from CVL will produce a rule violation, and [parametric rule](../user-guide/glossary.html#term-parametric-rule)s will not be instantiated on the deleted method. This can drastically improve performance if the deleted method is complex.
+
+The decision to replace a call by an approximation is made as follows:
+
+*   If the function is called from CVL rather than from contract code then it is never replaced by a summary.
+    
+*   If the code for the function is known at verification time, either because it is a method of `currentContract` or because the receiver contract is `linked`, then the function is only summarized if the resolution type is `ALL`.
+    
+*   If the code for the function is not known at verification time, then the function call must be summarized. If no summary is given, the default summary type is [AUTO](#auto-summary), whose behavior is determined by the type of function call. In this case, the verification report will contain a contract call resolution warning.
+    
+
+### [Summary resolution](#id25)[](#summary-resolution "Link to this heading")
+
+With [wildcard entries](#wildcard-methods-entries), [catch-all entries](#catch-all-entries), and [exact entries](#exact-methods-entries), multiple entries could apply to a method.
+
+For example, given a call to `Token.burn()` with a methods block that contains the following entries:
+
+methods {
+   function Token.burn() external \=> HAVOC\_ECF;
+   function \_.burn() external \=> HAVOC\_ALL;
+   function Token.\_ external \=> NONDET;
+}
+
+which summary will apply? In CVL, precedence is given to the summary attached to the _most specific signature_. Exact entries are considered more exact than wildcard entries, which are themselves more exact than catch-all entries. In other words, the order of precedence for summaries are:
+
+1.  Summaries given for [exact entries](#exact-methods-entries)
+    
+2.  Summaries given for [wildcard entries](#wildcard-methods-entries)
+    
+3.  Summaries given for [catch-all entries](#catch-all-entries)
+    
+
+Thus, in this example, the `HAVOC_ECF` summary would apply.
 
 Note
 
-The changes will take effect starting v4.3.1 of `certora-cli`.
+An entry that does not have a summary attached does _not_ factor into the precedence of summary application. For example, if the first entry in the above was instead `function Token.burn() external envfree;` without a summary, the `HAVOC_ALL` of the wildcard entry will apply.
+
+### [Summary types](#id26)[](#summary-types "Link to this heading")
+
+#### [View summaries: `ALWAYS`, `CONSTANT`, `PER_CALLEE_CONSTANT`, and `NONDET`](#id27)[](#view-summaries-always-constant-per-callee-constant-and-nondet "Link to this heading")
+
+These four summary types treat the summarized methods as view methods: the summarized methods are replaced by approximations that do not update the state of any contract (aside from any balances transferred with the method call itself). They differ in the assumptions made about the return value:
+
+*   The `ALWAYS(v)` approximation assumes that the method always returns `v`. The value `v` must be a literal boolean or integer.
+    
+*   The `CONSTANT` approximation assumes that all calls to methods with the given signature always return the same result. If the summarized method is expected to return multiple results, the approximation returns the correct number of values.
+    
+*   The `PER_CALLEE_CONSTANT` approximation assumes that all calls to the method on a given receiver contract must return the same result, but that the returned value may be different for different receiver contracts. If the summarized method is expected to return multiple results, the approximation returns the correct number of values.
+    
+*   The `NONDET` approximation makes no assumptions about the return values; each call to the summarized method may return a different result. The number of returned values is _not_ assumed to match the requested number, unless [optimisticReturnsize](../prover/cli/options.html#optimisticreturnsize) is specified.
+    
+
+Warning
+
+Using `CONSTANT` and `PER_CALLEE_CONSTANT` summaries for functions that have variable-sized outputs is a potential source of [vacuity](../user-guide/glossary.html#term-vacuity) and should be avoided. Prefer a `NONDET` summary where possible.
+
+#### [Havoc summaries: `HAVOC_ALL` and `HAVOC_ECF`](#id28)[](#havoc-summaries-havoc-all-and-havoc-ecf "Link to this heading")
+
+The most conservative summary type is `HAVOC_ALL`. This summary makes no assumptions at all about the called function: it is allowed to have arbitrary side effects on the state of any contract (including the calling contract), and may return any value. It can also change any contract’s ETH balance in an arbitrary way. In effect, calling a method that is summarized by `HAVOC_ALL` obliterates all knowledge that the Prover has about the state of the contract before the call.
+
+The `HAVOC_ALL` approximation is [sound](../user-guide/glossary.html#term-sound), but it can be overly restrictive in practice. In reality, a contract’s state cannot be changed in arbitrary ways, but only according to the contract’s methods. However, the Prover does not currently have support for more fine-grained reasoning about the side effects of unknown methods.
+
+A useful middle ground is the `HAVOC_ECF` summary type. A `HAVOC_ECF` summarization for a method encodes the assumption that the called method is not reentrant. This summarization approximates a method call by assuming it can have arbitrary effects on contracts other than the contract being verified, but that it can neither change the current contract’s state nor decrease its ETH balance (aside from value transferred by the method call itself).
+
+The Prover makes no assumptions about the return value of a havoc summary. For methods that return multiple values, the approximations are allowed to return the incorrect number of results. In most cases, this will cause the calling method to revert. If you want to ignore this particular revert condition, you can pass the [optimisticReturnsize](../prover/cli/options.html#optimisticreturnsize) option.
+
+#### [`DISPATCHER` summaries](#id29)[](#dispatcher-summaries "Link to this heading")
+
+The `DISPATCHER` summary type provides a useful approximation for methods of interfaces that are implemented by multiple contracts. For example, the methods defined by the ERC20 specification are often summarized using the `DISPATCHER` summary type.
+
+If a function with a `DISPATCHER` summary is called, the Prover will assume that the receiver of the call is one of the known contract implementations containing the given signature; the call will then behave the same way that a normal method call on the receiver would. The Prover will consider examples with every possible implementing contract, but multiple `DISPATCHER` method calls on the same receiver address in the same example will use the same receiver contract.
+
+The set of contract implementations that the Prover chooses from contains the set of contracts passed as [arguments to the CLI](../prover/cli/options.html). In addition, the Prover may consider an unknown target contract whose methods are all interpreted using the [AUTO summary](#auto-summary). The presence of the unknown contract is determined by the optional boolean argument to the `DISPATCHER` summary:
+
+*   With `DISPATCHER(false)` or just `DISPATCHER`, the unknown contract is considered as a possibility
+    
+*   With `DISPATCHER(true)`, only the known contract instances are considered
+    
+
+There is an alternative syntax for determining the presence or absence of the unknown contract:
+
+*   `DISPATCHER(optimistic=<true|false>)` with `true` and ‘false\` having the same meaning as in the other syntax.
+    
+
+In some cases there’s a proxy contract that only has a fallback function and that fallback then delegates function calls it receives to some other contract. For this case it could be useful for `DISPATCHER` summaries to also inline the `fallback` function of known contracts. To enable this use the following syntax:
+
+*   `DISPATCHER(optimistic=<true|false>, use_fallback<true|false>)`
+    
 
 Note
 
-To opt-out of the new CLI, one can set an environment variable `CERTORA_OLD_API` to `1`, e.g.: `export CERTORA_OLD_API=1`. **The old CLI will not be available in versions released after August 31st, 2023**
+The most commonly used dispatcher mode is `DISPATCHER(true)`, because in almost all cases `DISPATCHER(false)` and `AUTO` report the same set of violations. Since Certora CLI version 7.7.0 when using `_.someFunc() => DISPATCHER(true)` the Prover first tests that a method `someFunc()` exists in the scene, and if not will fail. Before this version, this may cause vacuous results.
 
-### Flags Renaming
-
+Note
 
-In CVL 2 some flags were renamed:
+`DISPATCHER` summaries cannot be used to summarize library calls.
 
-1.  flags with names that are generic or wrong
+#### [`AUTO` summaries](#id30)[](#auto-summaries "Link to this heading")
+
+The behavior of the `AUTO` summary depends on the type of call[\[2\]](#opcodes):
+
+*   Calls to non-library `view` and `pure` methods use the `NONDET` approximation: they keep all state unchanged.
     
-2.  flags that do not match their corresponding key in the `conf` file
+*   Calls to library methods and `delegatecall`s are assumed to change the caller’s storage in an arbitrary way, but are assumed to leave ETH balances and the storage of other contracts unchanged.
     
-3.  flags that do not follow the snake case format
-    
-
-This is the list of the flags that were renamed:
-
-
-|CVL 1         |CVL 2              |
-|--------------|-------------------|
-|--settings    |--prover_args      |
-|--path        |--solc_allow_path  |
-|--optimize    |--solc_optimize    |
-|--optimize_map|--solc_optimize_map|
-|--structLink  |--struct_link      |
-|--javaArgs    |--java_args        |
-
-
-### `Prover Args`
-
-
-`Prover args` are CLI flags that are sent to the Prover. `Prover args` can be set in one of two ways:
-
-1.  Using specific CLI flags (e.g. `--loop_iter`)
-    
-2.  As parameters to the `--prover_args` (`--settings` in CVL 1)
+*   All other calls and constructors use the `HAVOC_ECF` approximation: they are assumed to change the state of external contracts arbitrarily but to leave the caller’s state unchanged. `AUTO` summary behavior for the `CALL` opcode with 0 length `calldata` can be changed with [optimistic\_fallback](../prover/cli/options.html#optimisticfallback).
     
 
-Unlike CVL 1, if a `prover arg` is set using a specific CLI flag it cannot be set using `--prover_args`. In addition, the value commas and equal signs separators that were used in `--settings` were replaced with white-spaces in `--prover_args`.
+#### [`ASSERT_FALSE` summaries](#id31)[](#assert-false-summaries "Link to this heading")
 
-Example:
+This summary is a short syntax for a summary that contains an `assert false;` and checks that the summarized method is not reached. This can be useful for instance, in the presence of unresolved calls in combination with the `unresolved external` syntax to ensure that every unresolved call is actually dispatched correctly (i.e. use `unresolved external in _._ => DISPATCH [...] default ASSERT_FALSE`). It also enables more optimizations in the Prover and may lead to shorter running times.
 
-Consider this call to `certoraRun` using CVL 1 syntax
+#### [Expression summaries](#id32)[](#expression-summaries "Link to this heading")
 
-```
-certoraRun Compound.sol \
-    --verify Compound:Compound.spec  \
-    --solc solc8.13 \
-    --settings -smt_bitVectorTheory=true,-smt_hashingScheme=plainInjectivity,-assumeUnwindCond
+Contract methods can also be summarized using CVL expressions, typically [Functions](functions.html) or [Ghost axioms](ghosts.html#ghost-axioms) as approximations. Contract calls to the summarized method are replaced by evaluation of the CVL expression.
 
-```
+To use a CVL function or ghost as a summary, use a call to the function in place of the summary type.
 
+If a wildcard entry has a ghost or function summary, the user must explicitly provide an `expect` clause to the summary. The `expect` clause tells the Prover how to interpret the value returned by the summary. For example:
 
-In order to convert this call to CVL 2 we:
+methods {
+    function \_.foo() external \=> fooImpl() expect uint256 ALL;
+}
 
-1.  renamed `--settings` to `--prover_args`
+This entry will replace any call to any external function `foo()` with a call to the CVL function `fooImpl()` and will interpret the output of `fooImpl` as a `uint256`.
+
+If a function does not return any value, the summary should be declared with `expect void`.
+
+Warning
+
+You must check that your `expect` clauses are correct.
+
+The Prover cannot always check that the return type declared in the `expect` clause matches the return type that the contract expects. Continuing the above example, suppose the contract being verified declared a method `foo()` that returns a type other than `uint256`:
+
+function foo() external returns(address) {
+    ...
+}
+
+function bar() internal {
+    address x \= y.foo();
+}
+
+In this case, the Prover would encode the value returned by `fooImpl()` as a `uint256`, and the `bar` method would then attempt to decode this value as an `address`. This will cause undefined behavior, and in some cases the Prover will not be able to detect the error.
+
+The function call can only refer directly to the variables defined as arguments in the summary declarations; expressions that combine those variables are not supported.
+
+The function call may also use the special variable `calledContract`, which gives the address of the contract on which the summarized method was called. More precisely, it equates to `address(this)` in the context of the original call that is being summarized. This is useful for identifying the called contract in [wildcard summaries](cvl2/changes.html#cvl2-wildcards). For internal functions, the `calledContract` is also the calling contract, since they are the same. For library functions and delegate calls the `calledContract` is the contract calling the function. Similarly, there is another special variable `executingContract`, which gives the address of the contract making the call to the function that is summarized. For internal, delegate and library calls, `executingContract` is the same as `calledContract`. They differ only in non-delegate external calls, where `calledContract` will be the receiver of the call and `executingContract` will be the caller. The `calledContract` and `executingContract` keywords may only be used inside the `methods` block, and `executingContract` also in [hook bodies](hooks.html#executingcontract).
+
+For example, a wildcard summary for a `transferFrom` method may apply to multiple ERC20 contracts; the summary can update the correct ghost variables as follows:
+
+methods {
+    function \_.transferFrom(address from, address to, uint256 amount) external
+        \=> cvlTransferFrom(calledContract, from, to, amount);
+}
+
+ghost mapping(address \=> mapping(address \=> mathint)) tokenBalances;
+
+function cvlTransferFrom(address token, address from, address to, uint amount) {
+    if (...) {
+        tokenBalances\[token\]\[from\] \-= amount;
+        tokenBalances\[token\]\[to\]   += amount;
+    }
+}
+
+When summarizing an internal library function to an expression, you cannot refer to a variable that is `storage`, since CVL functions cannot take variables that are `storage`; for summaries involving `storage` references, refer to [rerouting summaries](#rerouting-summaries). You can refer to other variables, or use a summarization that doesn’t take parameters:
+
+methods {
+    function MyLibrary.guess(int\[\] storage numbers) internal returns (int) \=> goodGuess1(numbers); // not allowed
+    function MyLibrary.guess(int\[\] storage numbers, int myGuess) internal returns (int) \=> goodGuess2(myGuess); // allowed
+    function MyLibrary.guess(int\[\] storage numbers) internal returns (int) \=> ALWAYS(42); // allowed
+}
+
+function goodGuess1(int\[\] numbers) returns int { return 4; }
+function goodGuess2(int myGuess) returns int { return myGuess; }
+
+The call can also refer to a variable of type `env` introduced by a [with(env) clause](#with-env). Here `e` may be replaced with any valid identifier.
+
+The variable defined by the `with` clause contains an [env type](types.html#env) giving the context for the summarized function. This context may be different from the `env` passed to the original call from the spec. In particular:
+
+*   `e.msg.sender` and `e.msg.value` refer to the sender and value from the most recent call to a non-library[\[3\]](#library-with-env) external function (as in Solidity)
     
-2.  replaced `-assumeUnwindCond` with the flag `--optimistic_loop`
-    
-3.  removed the comma and equal sign separators
+*   The variables `e.tx.origin`, `e.block.number`, and `e.block.timestamp` will be the same as the the environment for the outermost function call.
     
 
-```
-certoraRun Compound.sol \
-    --verify Compound:Compound.spec  \
-    --solc solc8.13 \
-    --optimistic_loop \
-    --prover_args '-smt_bitVectorTheory true -smt_hashingScheme plainInjectivity'
+Continuing the above example, one can use the `env` to summarize the `transfer` method:
 
-```
+methods {
+    function \_.transfer(address to, uint256 amount) external with(env e)
+        \=> cvlTransfer(calledContract, e, to, amount) expect void;
+}
 
+function cvlTransfer(address token, env passedEnv, address to, uint amount) {
+    ...
+}
 
-### `Solidity Compiler Args`
-
+rule example {
+    env e;
+    address sender;
+    require e.msg.sender \== sender;
+    c.process(e);
+}
 
-The `Solidity Compiler Args` are CLI flags that are sent to the Solidity compiler. The behavior of the `Solidity Args` is similar to `Prover Args`. The flag `--solc_args` can only be used if there is no CLI flag that sets the Solidity flag and the value of `--solc_args` is a string that is sent as is to the Solidity compiler.
+In this example, if the `process` method calls `t.transfer(...)`, then in the `cvlTransfer` function, `token` will be `t`, `passedEnv.msg.sender` will be `c`, and `passedEnv.tx.origin` will be `sender`.
 
-Example:
+There is a restriction on the functions that can be used as approximations. Namely, the types of any arguments passed to or values returned from the summary must be [convertible](types.html#type-conversions) between CVL and Solidity types. Arguments that are not accessed in the summary may have any type.
 
-Consider this call to `certoraRun` using CVL 1 syntax
+You can still summarize functions that take unconvertible types as arguments, but you cannot access those arguments in your summary.
 
-```
-certoraRun Compound.sol \
-    --verify Compound:Compound.spec  \
-    --solc solc8.13 \
-    --solc_args "['--optimize', '--optimize-runs', '200', '--experimental-via-ir']"
+In case of recursive calls due to the summarization, the recursion limit can be set with `--summary_recursion_limit N'` where `N` is the number of recursive calls allowed (default 0). If `--optimistic_summary_recursion` is set, the recursion limit is assumed, i.e. one will never get a counterexample going above the recursion limit. Otherwise, if it is possible to go above the recursion limit, an assert will fire, producing a counterexample to the rule.
 
-```
+#### [Rerouting summaries](#id33)[](#rerouting-summaries "Link to this heading")
 
+As mentioned above, expression summaries cannot access parameters with `storage` location. In such cases where summaries require accessing `storage` located variables, rerouting summaries can be used. As the name suggests, a rerouting summary “reroutes” a function call which accepts `storage` located values to a harness function written in Solidity.
 
-In CVL 2 calling optimize is using `--solc_optimize`
+The syntax for a rerouting summary is exactly the same as an [expression summary](#expression-summary), except the expression used as the summary is an invocation of an `external` library function. For example:
 
-```
-certoraRun Compound.sol \
-    --verify Compound:Compound.spec  \
-    --solc solc8.13 \
-    --solc_optimize 200 \
-    --solc_args "--experimental-via-ir"
+methods {
+   function Bank.computeInterest(
+      Bank.Vault storage v, address depositor, uint principal
+   ) internal returns (uint)
+      \=> VaultHarness.computeInterestHarness(v, depositor, principal);
+}
 
-```
+Where `VaultHarness` looks like the following:
 
+library VaultHarness {
+    function computeInterestHarness(
+       Bank.Vault storage v, address depositor, uint principal
+    ) external returns (uint) {
+	   // ...
+    }
+}
 
-### Enhanced server support
-
+This summary replaces the invocation of the internal function `computeInterest` with a `delegatecall` into `VaultHarness.computeInterestHarness`. We will call the `VaultHarness.computeInterestHarness` function the “summary harness”. Via the `delegatecall`, the harness body `computeInterestHarness` may access `Bank`’s storage through the parameter `v`.
 
-In CVL 1, two server platforms were supported:
+Warning
 
-1.  `staging` was set using the flag `--staging [Branch/hotfix]`
+The harness body (in our example, `computeInterestHarness`) can contain arbitrary Solidity code, and may thus mutate the storage of the contract under verification in unsafe or unsound ways via the `storage` parameters. Summary harnesses should avoid modifying the storage if at all possible, or extreme care should be exercised so that any storage updates are sound.
+
+By the same token, any mutations to `memory` parameters will **not** be reflected in the summarized function caller’s memory. Other environment parameters (e.g., the value of `this`) are bound using the same semantics as a `delegatecall`.
+
+Note
+
+The `calldata` in the summary harness will contain an encoding of the summary harness arguments, which will not be the same as the `calldata` observed in the original, summarized function.
+
+The rerouting summaries come with some restrictions on their use.
+
+1.  Rerouting summaries can only be applied to `internal` functions [\[4\]](#public-vs-private)
     
-2.  `production` was set using the flag `--cloud [Branch/hotfix]`
+2.  The summary harness must return the same types as the summarized function
+    
+3.  The rerouting summary must consist **only** of the call to the summary harness. That is, `... => 1 + VaultHarness.computeInterestHarness(...)` is illegal.
+    
+4.  The summary harness **must** be defined as an external function in a library contract.
+    
+5.  The library contract must be included in the [scene](../user-guide/glossary.html#term-scene).
+    
+6.  The arguments passed to the summary harness must be some permutation of a subset of the original function’s `storage`, `memory`, and value parameters.[\[5\]](#parameters) Expressions involving the internal function parameters may **not** be used.
+    
+7.  The summary harness’ signature must exactly match the parameters passed through by the rerouting summary.
     
 
-In CVL 2 the flag `--server` was added to replace `--staging` `--cloud` and to allow adding additional server platforms. `--server` gets as a parameter the platform name. `--prover_version` is a new flag in CVL 2 For setting the Branch/hot-fix
+To elaborate on point 6: the arguments in the invocation of the summary harness **must** be one of the parameters bound by the method entry, provided that parameter does not have `calldata` location. Eligible parameters may be duplicated, reordered or simply dropped. For example, in our `computeInterestHarness` example, if the summary harness didn’t need the value of `depositor` we could have written:
+
+   function Bank.computeInterest(
+      Bank.Vault storage v, address depositor, uint principal
+   ) internal returns (uint)
+      \=> VaultHarness.computeInterestHarness(v, principal);
+
+With the appropriate update to the signature of `computeInterestHarness`. In addition, we could have written `computeInterestHarness(principal, v)`, again with the appropriate update to the function signature.
+
+Any expression that is not one of the parameters bound by the entry cannot be used. For example, the following is an **illegal** rerouting summary due to the addition on `principal`:
+
+   function Bank.computeInterest(
+      Bank.Vault storage v, address depositor, uint principal
+   ) internal returns (uint)
+      \=> VaultHarness.computeInterestHarness(v, depositor, principal + 3);
+
+Further, the following is also illegal, as the principal argument is now an expression that is not one of the parameters:
+
+   function Bank.computeInterest(
+      Bank.Vault storage v, address depositor, uint principal
+   ) internal returns (uint)
+      \=> VaultHarness.computeInterestHarness(v, depositor, cvlGetPrincipal());
+
+When resolving rerouting summaries, there is no subtyping of function arguments; as mentioned in point 7, the summary harness signature must exactly match the passed arguments. Formally, an entry binds parameters _p0_, _p1_, …, _pk_, each with declared type _t0_, _t1_, …, _tk_. Some permutation of these parameters is passed as arguments to the summary harness _f_: _pi_, _pj_, …. The types of these parameters, _ti_, _tj_, … determine the expected signature of _f_, that is, a function _f_(_ti_, _tj_, …) must be declared in the library contract.
+
+To give a concrete example, the following would **not** work:
+
+   function Bank.computeInterest(
+      Bank.Vault storage v, address depositor, uint128 principal
+   ) internal returns (uint)
+      \=> VaultHarness.computeInterestHarness(v, depositor, principal);
+
+library VaultHarness {
+   function computeInterestHarness(
+      Bank.Vault storage v, address depositor, uint256 principal
+   ) external returns (uint) { ... }
+}
+
+Note that the declared type of `principal` in the signature of `computeInterestHarness` is `uint256`, where as the type of `principal` bound in the entry is `uint128`.
+
+Note
+
+To reiterate: the body of the summary harness is treated like any other Solidity code, and thus may make external calls, contain loops, or call other internal functions (which may themselves be summarized).
+
+* * *
