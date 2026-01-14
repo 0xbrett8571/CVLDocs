@@ -24,17 +24,21 @@ The syntax for the `methods` block is given by the following [EBNF grammar](over
 methods          ::= "methods" "{" { method\_spec } "}"
 
 method\_spec      ::= "function"
-                     ( exact\_pattern | wildcard\_pattern | catch\_all\_pattern | catch\_unresolved\_calls\_pattern )
+                     pattern
                      \[ "returns" "(" evm\_types ")" \]
                      \[ "envfree" |  "with" "(" "env" id ")" \]
                      \[ "optional" \]
                      \[ "=>" method\_summary \[ "" | "UNRESOLVED" | "ALL" | "DELETE" \] \]
                      ";"
+                     | catch\_unresolved\_calls\_entry
+
+catch\_unresolved\_calls\_entry ::= "unresolved external in" pattern "=>" method\_summary ";"
+
+pattern          ::= exact\_pattern | wildcard\_pattern | catch\_all\_pattern
 
 exact\_pattern    ::= \[ id "." \] id "(" evm\_params ")" visibility \[ "returns" "(" evm\_types ")" \]
 wildcard\_pattern ::= "\_" "." id "(" evm\_params ")" visibility
 catch\_all\_pattern ::= id "." "\_" "external"
-catch\_unresolved\_calls\_pattern ::= "\_" "." "\_" "external"
 
 visibility ::= "internal" | "external"
 
@@ -50,6 +54,9 @@ method\_summary   ::= "ALWAYS" "(" value ")"
                    | "AUTO"
                    | "ASSERT\_FALSE"
                    | expr \[ "expect" id \]
+                   | dispatch\_list
+
+dispatch\_list     ::=
                    | "DISPATCH" \[ "(optimistic=false)" \]  "\[" dispatch\_list\_pattern \[","\] | empty "\]" "default" method\_summary
                    | "DISPATCH" \[ "(optimistic=true)" \]  "\[" dispatch\_list\_pattern \[","\] | empty "\]"
 
@@ -72,7 +79,7 @@ Each entry in the methods block contains a pattern that matches some set of cont
     
 *   [Catch-all entries](#catch-all-entries) apply a single summary to all methods of a specific contract.
     
-*   [Catch unresolved-calls entry](#catch-unresolved-calls-entry) apply a summary to all calls that cannot be statically resolved in any contract.
+*   [Catch unresolved-calls entry](#catch-unresolved-calls-entry) apply a summary to calls whose method signature cannot be statically resolved.
     
 
 ### [Exact entries](#id14)[](#exact-entries "Link to this heading")
@@ -153,7 +160,7 @@ methods {
     \];
 }
 
-Catch unresolved-calls entries are a special type of summary declaration that instructs the Prover to replace calls to unresolved external function calls with a specific kind of summary, dispatch list. By default, the Prover will use an [AUTO summary](#auto-summary) for unresolved function calls, but that may produce spurious counter examples. Catch unresolved-calls entries let the user refine the summary used for unresolved function calls.
+Catch unresolved-calls entries are a special type of summary declaration that instructs the Prover to replace calls to unresolved external function calls with a summary. By default, the Prover will use an [AUTO summary](#auto-summary) for unresolved function calls, but that may produce spurious counter examples. Catch unresolved-calls entries let the user refine the summary used for unresolved function calls.
 
 Note that the catch unresolved-calls entry _only applies_ in cases where the called function’s _sighash_ is unresolved. In the example below there is a function call `target.call(data)`. The sighash of the called function depends on the parameter `data` and cannot be known beforehand.
 
@@ -192,9 +199,9 @@ Note
 
 If `C.foo` has a (resolved) external call to `D.bar`, and `D.bar` contains an unresolved call, a catch-unresolved-calls entry that applies to `C.foo` will _not_ be applied to this unresolved call - only an entry that matches `D.bar` will be used.
 
-Catch unresolved-calls entries can only be summarized with a dispatch list summary (and a dispatch list summary is only applicable for a catch unresolved-calls entries).
+Catch unresolved-calls entries can only be summarized with a dispatch list, `HAVOC` or `NONDET` summary.
 
-As with `DISPATCH`, there are optimistic and pessimistic dispatch lists. This can be specified via `DISPATCHER(optimistic=<true|false>). When the` optimistic\` option is not specified in parentheses, the Prover will use a pessimistic dispatch list to ensure sound reasoning.
+As with `DISPATCHER`, there are optimistic and pessimistic dispatch lists. This can be specified via `DISPATCH(optimistic=<true|false>). When the` optimistic\` option is not specified in parentheses, the Prover will use a pessimistic dispatch list to ensure sound reasoning.
 
 A dispatch list summary directs the Prover to consider each of the methods described in the list as possible candidates for this unresolved call. The Prover will choose dynamically, that is, for each potential run of the program, which of them to call. It is done accurately by matching the selector from the call’s arguments to that of the methods described in the dispatch list. When using a pessimistic dispatch list and no method from the list matches, it will use the `default` summary. When using the optimistic dispatch list, an `ASSUME FALSE;` is inlined by the Prover; see the example below. The dispatch list will contain a list of patterns and the default summary to use in case no function matched the selector. The possible patterns are:
 
@@ -455,7 +462,23 @@ Note
 
 `DISPATCHER` summaries cannot be used to summarize library calls.
 
-#### [`AUTO` summaries](#id30)[](#auto-summaries "Link to this heading")
+#### [`DISPATCH` list summaries](#id30)[](#dispatch-list-summaries "Link to this heading")
+
+Similar to `DISPATCHER` which dispatches an unresolved method call to all contracts implementing the relevant function, we can also dynamically dispatch unresolved calls to a user-specified list of possible implementations.
+
+This is most commonly useful on calls where the method sighash is unresolved, see [Catch unresolved-calls entry](#catch-unresolved-calls-entry) for a detailed example in such a case.
+
+We can also use the `DISPATCH` list on [Wildcard entries](#wildcard-methods-entries), to restrict which contract’s implementations of the method to consider:
+
+methods {
+    function \_.foo() external \=> DISPATCH(true)\[ C.foo(), D.\_ \];
+}
+
+This will dispatch unresolved calls of a method `foo` to implementations in contracts `C` and `D`. Note, if `C` and `D` are the only contracts implementing `foo` in the scene, then this is equivalent to using `DISPATCHER(true)`. It is not necessary to specify the exact method (as in `C.foo()`) when using a dispatch list on a wildcard, it suffices to give the receiver (as in `D._`). It only makes a difference when giving `fallback=true` in which case we would consider also a fallback function in `D` in the example, but not in `C`.
+
+A `DISPATCH` summary is only useful on unresolved calls, so no application policy should be specified.
+
+#### [`AUTO` summaries](#id31)[](#auto-summaries "Link to this heading")
 
 The behavior of the `AUTO` summary depends on the type of call[\[2\]](#opcodes):
 
@@ -466,11 +489,11 @@ The behavior of the `AUTO` summary depends on the type of call[\[2\]](#opcodes):
 *   All other calls and constructors use the `HAVOC_ECF` approximation: they are assumed to change the state of external contracts arbitrarily but to leave the caller’s state unchanged. `AUTO` summary behavior for the `CALL` opcode with 0 length `calldata` can be changed with [optimistic\_fallback](../prover/cli/options.html#optimisticfallback).
     
 
-#### [`ASSERT_FALSE` summaries](#id31)[](#assert-false-summaries "Link to this heading")
+#### [`ASSERT_FALSE` summaries](#id32)[](#assert-false-summaries "Link to this heading")
 
 This summary is a short syntax for a summary that contains an `assert false;` and checks that the summarized method is not reached. This can be useful for instance, in the presence of unresolved calls in combination with the `unresolved external` syntax to ensure that every unresolved call is actually dispatched correctly (i.e. use `unresolved external in _._ => DISPATCH [...] default ASSERT_FALSE`). It also enables more optimizations in the Prover and may lead to shorter running times.
 
-#### [Expression summaries](#id32)[](#expression-summaries "Link to this heading")
+#### [Expression summaries](#id33)[](#expression-summaries "Link to this heading")
 
 Contract methods can also be summarized using CVL expressions, typically [Functions](functions.html) or [Ghost axioms](ghosts.html#ghost-axioms) as approximations. Contract calls to the summarized method are replaced by evaluation of the CVL expression.
 
@@ -522,6 +545,27 @@ function cvlTransferFrom(address token, address from, address to, uint amount) {
     }
 }
 
+Similarly, `executingContract` can be used to refer to the caller that makes the summarized call. This is useful for modeling wrappers (such as SafeERC20) where the callee should observe `msg.sender` as the wrapper contract:
+
+methods {
+    // SafeERC20 internal functions summarized as direct token calls
+    function \_.safeTransfer(address token, address to, uint256 value) internal with(env e)
+        \=> cvl\_safeTransfer(executingContract, e, token, to, value) expect void;
+}
+
+// CVL function that directly calls transfer on the token
+function cvl\_safeTransfer(address executing\_contract, env e, address token, address to, uint256 value) {
+    // Ensure the callee sees the same caller as the wrapper
+    require e.msg.sender \== executing\_contract, "The caller must be the contract executing the SafeERC20 function";
+
+    bool success \= token.transfer(e, to, value);
+
+    // SafeERC20 reverts on failure; model this behavior
+    require success, "SafeERC20 would revert on failure, so we model this behavior";
+}
+
+Here `executingContract` ensures that the `e.msg.sender` observed by the token’s `transfer` matches the contract that executed the wrapper, just as it would if we directly linked and called the token’s `transfer` implementation.
+
 When summarizing an internal library function to an expression, you cannot refer to a variable that is `storage`, since CVL functions cannot take variables that are `storage`; for summaries involving `storage` references, refer to [rerouting summaries](#rerouting-summaries). You can refer to other variables, or use a summarization that doesn’t take parameters:
 
 methods {
@@ -568,7 +612,7 @@ You can still summarize functions that take unconvertible types as arguments, bu
 
 In case of recursive calls due to the summarization, the recursion limit can be set with `--summary_recursion_limit N'` where `N` is the number of recursive calls allowed (default 0). If `--optimistic_summary_recursion` is set, the recursion limit is assumed, i.e. one will never get a counterexample going above the recursion limit. Otherwise, if it is possible to go above the recursion limit, an assert will fire, producing a counterexample to the rule.
 
-#### [Rerouting summaries](#id33)[](#rerouting-summaries "Link to this heading")
+#### [Rerouting summaries](#id34)[](#rerouting-summaries "Link to this heading")
 
 As mentioned above, expression summaries cannot access parameters with `storage` location. In such cases where summaries require accessing `storage` located variables, rerouting summaries can be used. As the name suggests, a rerouting summary “reroutes” a function call which accepts `storage` located values to a harness function written in Solidity.
 
